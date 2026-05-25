@@ -74,6 +74,9 @@ def generate_synergyfinder_input(
         ("DrugB", "DrugC")
     ]
     
+    # Track block summary for BlockID.csv
+    block_summary_data = []
+    
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         print(f"Processing: {sheet_name}")
@@ -100,6 +103,13 @@ def generate_synergyfinder_input(
         for pair in drug_pairs:
             block_id += 1
             exp_block_ids[pair] = block_id
+            # Add to block summary
+            block_summary_data.append({
+                "block_id": block_id,
+                "drug1": pair[0],
+                "drug2": pair[1],
+                "experiment": sheet_name
+            })
         
         # Track state for combination rows
         current_drug1 = None
@@ -213,6 +223,23 @@ def generate_synergyfinder_input(
     
     for key, count in sorted(block_summary.items()):
         print(f"  Block {key[0]}: {key[1]}-{key[2]} ({key[3]}) - {count} combinations")
+    
+    # Write BlockID.csv
+    block_id_path = output_path.replace(".csv", "_BlockID.csv").replace("_input", "")
+    with open(block_id_path, 'w', newline='') as csvfile:
+        fieldnames = ["block_id", "drug1", "drug2", "experiment"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        writer.writeheader()
+        for row in block_summary_data:
+            writer.writerow({
+                "block_id": row["block_id"],
+                "drug1": row["drug1"],
+                "drug2": row["drug2"],
+                "experiment": row["experiment"]
+            })
+    
+    print(f"\nBlock ID summary saved to: {block_id_path}")
     
     return output_path
 
