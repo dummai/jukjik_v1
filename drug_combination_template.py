@@ -3,11 +3,15 @@ Drug Combination Excel Template Generator
 
 Generates an Excel file with worksheets for drug combination experiments.
 Each worksheet contains a template for entering drug combination results.
+
+Input: Excel file with drug concentrations and experiment names
+Output: Excel file with all drug pair combinations
 """
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
+from itertools import combinations
 
 
 def generate_drug_combination_excel(
@@ -160,28 +164,127 @@ def generate_drug_combination_excel(
     return output_path
 
 
-if __name__ == "__main__":
-    # Example usage
-    experiments = [
-        {
-            "name": "DrugA_DrugB",
-            "drug_a": "DrugA",
-            "drug_b": "DrugB",
-            "conc_a": [10, 20, 50],
-            "conc_b": [5, 10, 20],
-            "replicates": 3
-        },
-        {
-            "name": "DrugA_DrugC",
-            "drug_a": "DrugA",
-            "drug_b": "DrugC",
-            "conc_a": [10, 20, 50],
-            "conc_b": [1, 5, 10],
-            "replicates": 3
-        }
-    ]
+def read_input_excel(input_path: str):
+    """
+    Read drug concentrations and experiments from input Excel file.
     
+    Args:
+        input_path: Path to input Excel file
+        
+    Returns:
+        tuple: (drugs_dict, experiments_list)
+            drugs_dict: {drug_name: [conc1, conc2, ...]}
+            experiments_list: [{"name": exp_name, "replicates": N}, ...]
+    """
+    wb = load_workbook(input_path)
+    
+    # Read DrugAndConcentrations sheet
+    drugs = {}
+    if "DrugAndConcentrations" in wb.sheetnames:
+        ws = wb["DrugAndConcentrations"]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            drug_name = row[0]
+            if drug_name:
+                concentrations = [c for c in row[1:] if c is not None]
+                if concentrations:
+                    drugs[drug_name] = concentrations
+    
+    # Read ExperimentName sheet
+    experiments = []
+    if "ExperimentName" in wb.sheetnames:
+        ws = wb["ExperimentName"]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            exp_name = row[0]
+            replicates = row[1] if row[1] else 3
+            if exp_name:
+                experiments.append({
+                    "name": exp_name,
+                    "replicates": int(replicates)
+                })
+    
+    wb.close()
+    return drugs, experiments
+
+
+def generate_from_excel(
+    input_path: str,
+    output_path: str = "drug_combination_results.xlsx"
+):
+    """
+    Read drug concentrations and experiments from Excel,
+    generate output file with all drug pair combinations.
+    
+    Args:
+        input_path: Path to input Excel file (GenExcel.xlsx format)
+        output_path: Output Excel file path
+        
+    Input Excel format:
+        Sheet 1: DrugAndConcentrations
+            | NAME  | Conc1 | Conc2 | Conc3 | ...
+            | DrugA | 0.78  | 1.56  | 3.12  | ...
+            | DrugB | 0.09  | 0.19  | 0.39  | ...
+            
+        Sheet 2: ExperimentName
+            | Experiment name | Replicates |
+            | Experiment 1    | 4          |
+            | Experiment 2    | 3          |
+    
+    Output:
+        One worksheet per (Drug1, Drug2, Experiment) combination
+    """
+    # Read input
+    drugs, experiments = read_input_excel(input_path)
+    
+    if not drugs:
+        raise ValueError("No drugs found in input file")
+    if not experiments:
+        raise ValueError("No experiments found in input file")
+    
+    # Generate all unique drug pairs
+    drug_names = list(drugs.keys())
+    drug_pairs = list(combinations(drug_names, 2))
+    
+    print(f"Found {len(drugs)} drugs: {list(drugs.keys())}")
+    print(f"Found {len(experiments)} experiments: {[e['name'] for e in experiments]}")
+    print(f"Generating {len(drug_pairs)} drug pairs: {drug_pairs}")
+    
+    # Build experiments list for generate_drug_combination_excel
+    output_experiments = []
+    for drug_a, drug_b in drug_pairs:
+        for exp in experiments:
+            sheet_name = f"{drug_a}_{drug_b}_{exp['name']}"
+            # Truncate sheet name if too long (Excel limit is 31 chars)
+            if len(sheet_name) > 31:
+                sheet_name = sheet_name[:31]
+            
+            output_experiments.append({
+                "name": sheet_name,
+                "drug_a": drug_a,
+                "drug_b": drug_b,
+                "conc_a": drugs[drug_a],
+                "conc_b": drugs[drug_b],
+                "replicates": exp["replicates"]
+            })
+    
+    print(f"Total worksheets to generate: {len(output_experiments)}")
+    
+    # Generate output
     generate_drug_combination_excel(
-        experiments=experiments,
-        output_path="drug_combination_results.xlsx"
+        experiments=output_experiments,
+        output_path=output_path
     )
+    
+    return output_path
+
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        input_file = sys.argv[1]
+        output_file = sys.argv[2] if len(sys.argv) > 2 else "drug_combination_results.xlsx"
+    else:
+        input_file = "GenExcel.xlsx"
+        output_file = "drug_combination_results.xlsx"
+    
+    generate_from_excel(input_file, output_file)
