@@ -66,6 +66,9 @@ def plot_and_save(matrix: pd.DataFrame, out_path: str, dpi: int = 300) -> None:
         linewidths=0.5,
         cbar_kws={"label": "max_synergy"},
         square=False,
+        annot=True,
+        fmt=".2f",
+        annot_kws={"size": 7},
     )
     ax.set_xlabel("Drug1_Drug2_Experiment")
     ax.set_ylabel("Model")
@@ -79,9 +82,9 @@ def plot_and_save(matrix: pd.DataFrame, out_path: str, dpi: int = 300) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate synergy heatmap")
-    parser.add_argument("--summary", required=True, help="Path to synergy_summary.csv")
-    parser.add_argument("--blocks", required=True, help="Path to SynergyFinder_BlockID.csv")
-    parser.add_argument("--output", default="heatmap.jpeg", help="Output JPEG file path")
+    parser.add_argument("--summary", default="../synergy_summary.csv", help="Path to synergy_summary.csv")
+    parser.add_argument("--blocks", default="../SynergyFinder_BlockID.csv", help="Path to SynergyFinder_BlockID.csv")
+    parser.add_argument("--output", default="../heatmap.jpeg", help="Output JPEG file path")
     parser.add_argument("--dpi", type=int, default=300, help="Output image resolution")
     args = parser.parse_args()
 
