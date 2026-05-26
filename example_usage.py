@@ -4,7 +4,7 @@ Example usage of drug_combination_template.py
 This script demonstrates how to use the drug combination template generator.
 """
 
-from drug_combination_template import generate_from_excel, generate_drug_combination_excel
+from drug_combination_template import generate_from_excel
 
 
 def main():
