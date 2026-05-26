@@ -26,7 +26,7 @@ def build_matrix(df_sum: pd.DataFrame, df_block: pd.DataFrame) -> pd.DataFrame:
     Parameters
     ----------
     df_sum : DataFrame
-        Contains ``block_id``, ``model`` and ``max_synergy``.
+        Contains ``block_id``, ``model`` and ``mean_synergy``.
     df_block : DataFrame
         Contains ``block_id``, ``drug1``, ``drug2`` and ``experiment``.
 
@@ -50,7 +50,7 @@ def build_matrix(df_sum: pd.DataFrame, df_block: pd.DataFrame) -> pd.DataFrame:
         print(f"Warning: missing block labels for IDs: {missing}")
 
     # Pivot to matrix
-    matrix = df.pivot(index="model", columns="label", values="max_synergy")
+    matrix = df.pivot(index="model", columns="label", values="mean_synergy")
     return matrix
 
 
@@ -64,7 +64,7 @@ def plot_and_save(matrix: pd.DataFrame, out_path: str, dpi: int = 300) -> None:
         cmap=cmap,
         center=0,
         linewidths=0.5,
-        cbar_kws={"label": "max_synergy"},
+        cbar_kws={"label": "mean_synergy"},
         square=False,
         annot=True,
         fmt=".2f",
