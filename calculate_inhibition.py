@@ -163,12 +163,22 @@ def calculate_percent_inhibition(
 
 if __name__ == "__main__":
     import sys
+    import argparse
     
-    if len(sys.argv) > 1:
-        input_file = sys.argv[1]
-        output_file = sys.argv[2] if len(sys.argv) > 2 else "PercInhibition.xlsx"
-    else:
-        input_file = "/Users/kwan/Documents/dengue/DENV_AI/RawInput.xlsx"
-        output_file = "/Users/kwan/Documents/dengue/DENV_AI/jukjik_v1/PercInhibition.xlsx"
+    parser = argparse.ArgumentParser(
+        description="Calculate percent inhibition from raw experimental data"
+    )
+    parser.add_argument(
+        "input",
+        help="Path to input RawInput.xlsx file"
+    )
+    parser.add_argument(
+        "output",
+        nargs="?",
+        default="PercInhibition.xlsx",
+        help="Path to output file (default: PercInhibition.xlsx)"
+    )
     
-    calculate_percent_inhibition(input_file, output_file)
+    args = parser.parse_args()
+    
+    calculate_percent_inhibition(args.input, args.output)

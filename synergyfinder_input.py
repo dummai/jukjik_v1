@@ -49,9 +49,41 @@ def parse_drug_conc(value):
     return None, None
 
 
+def detect_drug_pairs(workbook) -> list:
+    """
+    Auto-detect drug pairs from the workbook.
+    
+    Scans all sheets for single drug names and generates all possible pairs.
+    
+    Args:
+        workbook: openpyxl Workbook object
+        
+    Returns:
+        List of drug pair tuples, e.g., [("DrugA", "DrugB"), ("DrugA", "DrugC"), ...]
+    """
+    all_drugs = set()
+    
+    for sheet_name in workbook.sheetnames:
+        ws = workbook[sheet_name]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            col_a = row[0]
+            if col_a is not None and str(col_a).startswith("Drug") and "_" not in str(col_a):
+                all_drugs.add(str(col_a))
+    
+    drugs = sorted(list(all_drugs))
+    
+    pairs = []
+    for i in range(len(drugs)):
+        for j in range(i + 1, len(drugs)):
+            pairs.append((drugs[i], drugs[j]))
+    
+    return pairs
+
+
 def generate_synergyfinder_input(
     input_path: str,
-    output_path: str = "SynergyFinder_input.csv"
+    output_path: str = "SynergyFinder_input.csv",
+    drug_pairs: list = None
 ):
     """
     Convert PercInhibition.xlsx to SynergyFinder Plus format.
@@ -59,20 +91,17 @@ def generate_synergyfinder_input(
     Args:
         input_path: Path to PercInhibition.xlsx
         output_path: Output CSV file path
+        drug_pairs: Optional list of drug pair tuples. If None, auto-detected from data.
+            Format: [("DrugA", "DrugB"), ("DrugA", "DrugC"), ...]
         
     Output format:
         block_id,drug1,drug2,conc1,conc2,response,conc_unit
     """
     
-    # Load input workbook
     wb = load_workbook(input_path)
     
-    # Define drug pairs in order
-    drug_pairs = [
-        ("DrugA", "DrugB"),
-        ("DrugA", "DrugC"),
-        ("DrugB", "DrugC")
-    ]
+    if drug_pairs is None:
+        drug_pairs = detect_drug_pairs(wb)
     
     # Track block summary for BlockID.csv
     block_summary_data = []
@@ -347,13 +376,31 @@ def generate_synergyfinder_input(
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
     
-    if len(sys.argv) > 1:
-        input_file = sys.argv[1]
-        output_file = sys.argv[2] if len(sys.argv) > 2 else "SynergyFinder_input.csv"
-    else:
-        input_file = "/Users/kwan/Documents/dengue/DENV_AI/PercInhibition.xlsx"
-        output_file = "/Users/kwan/Documents/dengue/DENV_AI/jukjik_v1/SynergyFinder_input.csv"
+    parser = argparse.ArgumentParser(
+        description="Convert PercInhibition.xlsx to SynergyFinder Plus format"
+    )
+    parser.add_argument(
+        "input",
+        help="Path to input PercInhibition.xlsx file"
+    )
+    parser.add_argument(
+        "output",
+        nargs="?",
+        default="SynergyFinder_input.csv",
+        help="Path to output CSV file (default: SynergyFinder_input.csv)"
+    )
+    parser.add_argument(
+        "--drug-pairs",
+        nargs="+",
+        help="Drug pairs in format DrugA:DrugB DrugA:DrugC (default: auto-detect)"
+    )
     
-    generate_synergyfinder_input(input_file, output_file)
+    args = parser.parse_args()
+    
+    drug_pairs = None
+    if args.drug_pairs:
+        drug_pairs = [tuple(pair.split(":")) for pair in args.drug_pairs]
+    
+    generate_synergyfinder_input(args.input, args.output, drug_pairs)

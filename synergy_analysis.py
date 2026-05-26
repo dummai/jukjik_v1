@@ -673,12 +673,16 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Calculate drug synergy scores')
-    parser.add_argument('input', nargs='?', 
-                        default='/Users/kwan/Documents/dengue/DENV_AI/SynergyFinder_input_block6.csv',
-                        help='Input CSV file path')
-    parser.add_argument('output', nargs='?',
-                        default='/Users/kwan/Documents/dengue/DENV_AI/synergy_score_table.csv',
-                        help='Output CSV file path')
+    parser.add_argument(
+        "input",
+        help="Input CSV file path (SynergyFinder format)"
+    )
+    parser.add_argument(
+        "output",
+        nargs="?",
+        default="synergy_score_table.csv",
+        help="Output CSV file path (default: synergy_score_table.csv)"
+    )
     
     args = parser.parse_args()
     
