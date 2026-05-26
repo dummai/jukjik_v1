@@ -70,9 +70,11 @@ def plot_and_save(matrix: pd.DataFrame, out_path: str, dpi: int = 300) -> None:
         fmt=".2f",
         annot_kws={"size": 7},
     )
+    ax.xaxis.tick_top()
+    ax.xaxis.set_label_position('top')
     ax.set_xlabel("Drug1_Drug2_Experiment")
     ax.set_ylabel("Model")
-    plt.xticks(rotation=45, ha="right")
+    plt.xticks(rotation=45, ha="left")
     plt.tight_layout()
     # Ensure parent dir exists
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
