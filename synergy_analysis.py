@@ -500,12 +500,17 @@ def generate_synergy_summary(block_id: int, results: list, loewe_ci: np.ndarray,
         syn_key = f'{model}_synergy'
         scores = [r[syn_key] for r in combo_results]
         
-        mean_syn = np.mean(scores)
-        max_syn = np.max(scores)
-        min_syn = np.min(scores)
+        valid_scores = [s for s in scores if not np.isnan(s)]
         
-        max_idx = scores.index(max_syn)
-        min_idx = scores.index(min_syn)
+        if not valid_scores:
+            continue
+        
+        mean_syn = np.nanmean(scores)
+        max_syn = np.nanmax(scores)
+        min_syn = np.nanmin(scores)
+        
+        max_idx = scores.index(max_syn) if not np.isnan(max_syn) else 0
+        min_idx = scores.index(min_syn) if not np.isnan(min_syn) else 0
         
         max_conc1 = combo_results[max_idx]['conc1']
         max_conc2 = combo_results[max_idx]['conc2']
@@ -555,38 +560,23 @@ def generate_synergy_summary(block_id: int, results: list, loewe_ci: np.ndarray,
     return summary_df
 
 
-def calculate_synergy(input_file: str, output_file: str):
-    """Main function to calculate drug synergy from input file."""
-    print(f"Loading input data from: {input_file}")
-    df = pd.read_csv(input_file)
-    print(f"  Total rows: {len(df)}")
-    print(f"  Columns: {list(df.columns)}")
-    
-    block_id = int(df['block_id'].iloc[0])
-    
-    response_matrix, conc1_vals, conc2_vals = create_response_matrix(df)
+def process_single_block(df_block: pd.DataFrame, block_id: int) -> Tuple[list, np.ndarray]:
+    """Process a single block and return results."""
+    response_matrix, conc1_vals, conc2_vals = create_response_matrix(df_block)
     
     input_lookup = {}
-    for _, row in df.iterrows():
+    for _, row in df_block.iterrows():
         key = (float(row['conc1']), float(row['conc2']))
         input_lookup[key] = float(row['response'])
     
-    print(f"\nResponse matrix shape: {response_matrix.shape}")
-    print(f"  Conc1 values: {conc1_vals}")
-    print(f"  Conc2 values: {conc2_vals}")
-    
-    print(f"\nCalculating ZIP synergy...")
     zip_fit, zip_ref, zip_synergy, updated_single = calculate_zip(
         response_matrix, conc1_vals, conc2_vals)
     
-    print(f"Calculating Loewe synergy...")
     loewe_ref, loewe_synergy, loewe_ci = calculate_loewe(
         response_matrix, conc1_vals, conc2_vals)
     
-    print(f"Calculating Bliss synergy...")
     bliss_ref, bliss_synergy = calculate_bliss(response_matrix)
     
-    print(f"Calculating HSA synergy...")
     hsa_ref, hsa_synergy = calculate_hsa(response_matrix)
     
     output_order = generate_output_order(conc1_vals, conc2_vals)
@@ -637,31 +627,68 @@ def calculate_synergy(input_file: str, output_file: str):
             }
         results.append(row)
     
+    return results, loewe_ci, conc1_vals, conc2_vals
+
+
+def calculate_synergy(input_file: str, output_file: str):
+    """Main function to calculate drug synergy from input file."""
+    import os
+    
+    print(f"Loading input data from: {input_file}")
+    df = pd.read_csv(input_file)
+    print(f"  Total rows: {len(df)}")
+    print(f"  Columns: {list(df.columns)}")
+    
+    unique_blocks = sorted(df['block_id'].unique())
+    print(f"  Unique blocks: {len(unique_blocks)}")
+    
+    all_results = []
+    all_summaries = []
+    
+    for block_id in unique_blocks:
+        block_id = int(block_id)
+        print(f"\n{'='*60}")
+        print(f"Processing Block {block_id}")
+        print(f"{'='*60}")
+        
+        df_block = df[df['block_id'] == block_id].copy()
+        
+        results, loewe_ci, conc1_vals, conc2_vals = process_single_block(df_block, block_id)
+        all_results.extend(results)
+        
+        summary_file = os.path.join(os.path.dirname(output_file), f'synergy_summary_block{block_id}.csv')
+        summary_df = generate_synergy_summary(block_id, results, loewe_ci, conc1_vals, conc2_vals, summary_file)
+        if summary_df is not None:
+            all_summaries.append(summary_df)
+    
     cols = ['block_id', 'conc1', 'conc2', 'ZIP_fit', 'ZIP_ref', 'ZIP_synergy',
             'HSA_ref', 'HSA_synergy', 'Loewe_ref', 'Loewe_synergy', 'Loewe_ci',
             'Bliss_ref', 'Bliss_synergy']
-    output_df = pd.DataFrame(results)[cols]
+    output_df = pd.DataFrame(all_results)[cols]
     
     output_df.to_csv(output_file, index=False)
     print(f"\nSaved synergy results to: {output_file}")
     
-    import os
-    summary_file = os.path.join(os.path.dirname(output_file), 'synergy_summary.csv')
-    generate_synergy_summary(block_id, results, loewe_ci, conc1_vals, conc2_vals, summary_file)
-    
-    combo_results = [r for r in results if r['conc1'] > 0 and r['conc2'] > 0]
+    if all_summaries:
+        combined_summary = pd.concat(all_summaries, ignore_index=True)
+        summary_file = os.path.join(os.path.dirname(output_file), 'synergy_summary.csv')
+        combined_summary.to_csv(summary_file, index=False)
+        print(f"Saved combined synergy summary to: {summary_file}")
     
     print(f"\n{'='*60}")
-    print("Synergy Summary:")
+    print("Overall Synergy Summary:")
     print(f"{'='*60}")
     
     for model in ['ZIP', 'Bliss', 'HSA', 'Loewe']:
         syn_key = f'{model}_synergy'
-        scores = [r[syn_key] for r in combo_results]
-        mean_syn = np.mean(scores)
-        min_syn = np.min(scores)
-        max_syn = np.max(scores)
-        print(f"  {model}: Mean={mean_syn:.2f}, Range=[{min_syn:.2f}, {max_syn:.2f}]")
+        scores = [r[syn_key] for r in all_results if r['conc1'] > 0 and r['conc2'] > 0]
+        if scores:
+            valid_scores = [s for s in scores if not np.isnan(s)]
+            if valid_scores:
+                mean_syn = np.mean(valid_scores)
+                min_syn = np.min(valid_scores)
+                max_syn = np.max(valid_scores)
+                print(f"  {model}: Mean={mean_syn:.2f}, Range=[{min_syn:.2f}, {max_syn:.2f}]")
     
     print(f"{'='*60}")
     
