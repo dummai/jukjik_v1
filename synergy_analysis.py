@@ -467,6 +467,94 @@ def generate_output_order(conc1_vals: List[float], conc2_vals: List[float]) -> L
     return grid
 
 
+def generate_synergy_summary(block_id: int, results: list, loewe_ci: np.ndarray,
+                             conc1_vals: List[float], conc2_vals: List[float],
+                             output_file: str):
+    """
+    Generate summary CSV with max/min synergy information for each model.
+    
+    Output columns:
+    - block_id: Block identifier
+    - model: Synergy model name
+    - max_synergy: Maximum synergy score
+    - max_conc1: Drug 1 concentration at max synergy
+    - max_conc2: Drug 2 concentration at max synergy
+    - min_synergy: Minimum synergy score
+    - min_conc1: Drug 1 concentration at min synergy
+    - min_conc2: Drug 2 concentration at min synergy
+    - mean_synergy: Mean synergy across all combinations
+    - synergy_category: "Synergy", "Antagonism", or "Additive"
+    - ci_at_max_synergy: CI value at max synergy (Loewe only)
+    """
+    combo_results = [r for r in results if r['conc1'] > 0 and r['conc2'] > 0]
+    
+    if not combo_results:
+        return
+    
+    conc1_to_idx = {v: i for i, v in enumerate(conc1_vals)}
+    conc2_to_idx = {v: i for i, v in enumerate(conc2_vals)}
+    
+    summary_rows = []
+    
+    for model in ['ZIP', 'Bliss', 'HSA', 'Loewe']:
+        syn_key = f'{model}_synergy'
+        scores = [r[syn_key] for r in combo_results]
+        
+        mean_syn = np.mean(scores)
+        max_syn = np.max(scores)
+        min_syn = np.min(scores)
+        
+        max_idx = scores.index(max_syn)
+        min_idx = scores.index(min_syn)
+        
+        max_conc1 = combo_results[max_idx]['conc1']
+        max_conc2 = combo_results[max_idx]['conc2']
+        min_conc1 = combo_results[min_idx]['conc1']
+        min_conc2 = combo_results[min_idx]['conc2']
+        
+        if mean_syn > 5:
+            category = "Synergy"
+        elif mean_syn < -5:
+            category = "Antagonism"
+        else:
+            category = "Additive"
+        
+        ci_at_max = ''
+        if model == 'Loewe':
+            i = conc1_to_idx.get(max_conc1)
+            j = conc2_to_idx.get(max_conc2)
+            if i is not None and j is not None:
+                ci_val = loewe_ci[i, j]
+                if not np.isnan(ci_val):
+                    ci_at_max = round(ci_val, 3)
+        
+        summary_rows.append({
+            'block_id': block_id,
+            'model': model,
+            'max_synergy': round(max_syn, 3),
+            'max_conc1': max_conc1,
+            'max_conc2': max_conc2,
+            'min_synergy': round(min_syn, 3),
+            'min_conc1': min_conc1,
+            'min_conc2': min_conc2,
+            'mean_synergy': round(mean_syn, 3),
+            'synergy_category': category,
+            'ci_at_max_synergy': ci_at_max
+        })
+    
+    summary_df = pd.DataFrame(summary_rows)
+    
+    cols = ['block_id', 'model', 'max_synergy', 'max_conc1', 'max_conc2',
+            'min_synergy', 'min_conc1', 'min_conc2', 'mean_synergy',
+            'synergy_category', 'ci_at_max_synergy']
+    summary_df = summary_df[cols]
+    
+    summary_df.to_csv(output_file, index=False)
+    print(f"Saved synergy summary to: {output_file}")
+    
+    return summary_df
+
+
 def calculate_synergy(input_file: str, output_file: str):
     """Main function to calculate drug synergy from input file."""
     print(f"Loading input data from: {input_file}")
@@ -556,6 +644,10 @@ def calculate_synergy(input_file: str, output_file: str):
     
     output_df.to_csv(output_file, index=False)
     print(f"\nSaved synergy results to: {output_file}")
+    
+    import os
+    summary_file = os.path.join(os.path.dirname(output_file), 'synergy_summary.csv')
+    generate_synergy_summary(block_id, results, loewe_ci, conc1_vals, conc2_vals, summary_file)
     
     combo_results = [r for r in results if r['conc1'] > 0 and r['conc2'] > 0]
     
