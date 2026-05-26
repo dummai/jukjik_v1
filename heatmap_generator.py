@@ -51,6 +51,7 @@ def build_matrix(df_sum: pd.DataFrame, df_block: pd.DataFrame) -> pd.DataFrame:
 
     # Pivot to matrix
     matrix = df.pivot(index="model", columns="label", values="mean_synergy")
+    matrix.columns.name = None
     return matrix
 
 
@@ -58,7 +59,7 @@ def plot_and_save(matrix: pd.DataFrame, out_path: str, dpi: int = 300) -> None:
     """Render a heatmap and save it as a publication‑quality JPEG."""
     plt.figure(figsize=(max(8, len(matrix.columns) * 0.4), max(6, len(matrix.index) * 0.4)))
     # Diverging green/red palette
-    cmap = sns.diverging_palette(150, 10, as_cmap=True)
+    cmap = sns.diverging_palette(10, 150, as_cmap=True)
     ax = sns.heatmap(
         matrix,
         cmap=cmap,
