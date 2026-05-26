@@ -3,7 +3,7 @@
 Drug Synergy Analysis - Matching SynergyFinder Plus Output Format
 
 Calculates drug synergy scores using ZIP, Bliss, Loewe, and HSA models.
-Implements the same algorithms as R's SynergyFinder package.
+Implements the same algorithms as R's SynergyFinder package using drc::LL.4.
 
 Input: CSV with columns: block_id, drug1, drug2, conc1, conc2, response, conc_unit
 Output: CSV with columns: block_id, conc1, conc2, ZIP_fit, ZIP_ref, ZIP_synergy,
@@ -13,54 +13,63 @@ References:
 - Yadav B, Wennerberg K, Aittokallio T, Tang J. Searching for Drug Synergy in 
   Complex Dose-Response Landscape Using an Interaction Potency Model.
   Computational and Structural Biotechnology Journal 2015; 13: 504-513.
+- Ritz C, Baty F, Streibig JC, Gerhard D. Dose-Response Analysis Using R. PLoS ONE 2015.
 """
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import fsolve, curve_fit
+from scipy.optimize import fsolve, curve_fit, minimize
 from typing import Dict, List, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
 
 
-def hill_equation_4pl(dose: np.ndarray, hill: float, e0: float, emax: float, ec50: float) -> np.ndarray:
+def ll4_model(dose: np.ndarray, b: float, c: float, d: float, e: float) -> np.ndarray:
     """
-    4-parameter logistic (4PL) equation - standard form used in SynergyFinder.
+    4-parameter logistic model (LL.4) from R's drc package.
     
-    E(d) = e0 + (emax - e0) / (1 + (dose/ec50)^hill)
+    f(x) = c + (d - c) / (1 + exp(b * (log(x) - log(e))))
     
-    Parameters are ordered as: hill (slope), e0 (min), emax (max), ec50
+    Parameters:
+    -----------
+    b : slope parameter (negative for increasing dose-response)
+    c : lower limit (minimum response)
+    d : upper limit (maximum response)  
+    e : EC50 (dose producing 50% of maximum effect)
+    
+    Note: In R's drc, parameter order is (b, c, d, e)
     """
     dose = np.atleast_1d(dose).astype(float)
     result = np.zeros_like(dose)
     
-    zero_mask = dose == 0
-    nonzero_mask = dose > 0
+    zero_mask = (dose == 0) | np.isnan(dose)
+    nonzero_mask = ~zero_mask
     
-    result[zero_mask] = e0
+    if np.any(zero_mask):
+        result[zero_mask] = c
     
     if np.any(nonzero_mask):
-        d = dose[nonzero_mask]
-        result[nonzero_mask] = e0 + (emax - e0) / (1.0 + np.power(d / ec50, hill))
+        log_dose = np.log(dose[nonzero_mask])
+        result[nonzero_mask] = c + (d - c) / (1.0 + np.exp(b * (log_dose - np.log(e))))
     
     return result
 
 
-def fit_4pl_curve(doses: np.ndarray, responses: np.ndarray, 
+def fit_ll4_curve(doses: np.ndarray, responses: np.ndarray,
                   fixed_lower: float = None, fixed_upper: float = 100.0) -> Optional[Dict]:
     """
-    Fit 4PL curve to dose-response data matching R's drc::drm with L.4.
+    Fit LL.4 curve matching R's drc::drm with fct = LL.4(fixed = c(NA, c, d, NA)).
     
     Parameters:
     -----------
     doses : array of concentrations (>0)
     responses : array of responses
-    fixed_lower : if provided, fix the lower bound (E0) to this value
-    fixed_upper : if provided, fix the upper bound (Emax) to this value (default 100)
+    fixed_lower : if provided, fix parameter c (lower limit) to this value
+    fixed_upper : if provided, fix parameter d (upper limit) to this value (default 100)
     
     Returns:
     --------
-    dict with parameters: Hill, E0, Emax, EC50
+    dict with parameters: b (slope), c (lower), d (upper), e (EC50)
     """
     valid_mask = ~(np.isnan(doses) | np.isnan(responses)) & (doses > 0)
     doses = doses[valid_mask]
@@ -69,83 +78,149 @@ def fit_4pl_curve(doses: np.ndarray, responses: np.ndarray,
     if len(doses) < 2:
         return None
     
-    responses = np.maximum(responses, 0)
+    responses = np.clip(responses, 0, 150)
     
     if fixed_lower is not None:
-        e0_fixed = fixed_lower
+        c_fixed = fixed_lower
     else:
-        e0_fixed = np.min(responses) if len(responses) > 0 else 0
+        c_fixed = np.min(responses) if len(responses) > 0 else 0
     
-    emax_fixed = fixed_upper
+    d_fixed = fixed_upper
     
-    ec50_init = np.median(doses)
-    hill_init = 1.0
+    e_init = np.median(doses)
+    b_init = -2.0
     
-    def fit_func(d, hill, ec50):
-        return hill_equation_4pl(d, hill, e0_fixed, emax_fixed, ec50)
+    def fit_func(dose, b, e):
+        return ll4_model(dose, b, c_fixed, d_fixed, e)
     
     try:
         popt, _ = curve_fit(
             fit_func, doses, responses,
-            p0=[hill_init, ec50_init],
-            bounds=([0.01, min(doses)/10], [10.0, max(doses)*10]),
-            maxfev=10000
+            p0=[b_init, e_init],
+            bounds=([-20.0, min(doses)/100], [0.01, max(doses)*100]),
+            maxfev=10000,
+            method='trf'
         )
         
         return {
-            'Hill': popt[0],
-            'E0': e0_fixed,
-            'Emax': emax_fixed,
-            'EC50': popt[1]
+            'b': popt[0],
+            'c': c_fixed,
+            'd': d_fixed,
+            'e': popt[1]
         }
     except Exception:
-        return None
+        try:
+            popt, _ = curve_fit(
+                fit_func, doses, responses,
+                p0=[-5.0, np.mean(doses)],
+                maxfev=10000
+            )
+            return {
+                'b': popt[0],
+                'c': c_fixed,
+                'd': d_fixed,
+                'e': popt[1]
+            }
+        except Exception:
+            return None
 
 
-def predict_4pl(dose: float, params: Dict) -> float:
-    """Predict response at given dose using 4PL parameters."""
-    if params is None or dose <= 0:
-        return params['E0'] if params else 0.0
-    result = hill_equation_4pl(np.array([dose]), params['Hill'], params['E0'], params['Emax'], params['EC50'])
-    return float(result[0])
+def predict_ll4(dose: float, params: Dict) -> float:
+    """Predict response at given dose using LL.4 parameters."""
+    if params is None:
+        return 0.0
+    if dose <= 0:
+        return params['c']
+    result = ll4_model(np.array([dose]), params['b'], params['c'], params['d'], params['e'])
+    return float(np.clip(result[0], 0, 100))
 
 
-def iso_effective_dose(E: float, params: Dict) -> float:
+def predict_hill(dose: float, params: Dict) -> float:
     """
-    Calculate the dose that produces effect E (inverse of 4PL).
+    Predict response using standard Hill equation.
     
-    D = EC50 * ((E - E0) / (Emax - E))^(1/Hill)
+    y = E0 + (Emax - E0) * (dose/EC50)^hill / (1 + (dose/EC50)^hill)
+    
+    This is used for Loewe calculations in R's SynergyFinder.
+    """
+    if params is None:
+        return 0.0
+    
+    e0 = params['c']
+    emax = params['d']
+    ec50 = params['e']
+    hill = -params['b']  # R's LL.4 b is negative, Hill equation uses positive
+    
+    if dose <= 0:
+        return e0
+    
+    ratio = (dose / ec50) ** hill
+    result = e0 + (emax - e0) * ratio / (1.0 + ratio)
+    return float(np.clip(result, 0, 100))
+
+
+def iso_effective_dose_ll4(E: float, params: Dict) -> float:
+    """
+    Calculate the dose that produces effect E using LL.4 inverse.
+    
+    From LL.4: E = c + (d-c)/(1 + exp(b*(log(D) - log(e))))
+    Solving for D: D = e * exp((log((d-c)/(E-c) - 1)) / b)
     """
     if params is None:
         return float('inf')
     
-    e0 = params['E0']
-    emax = params['Emax']
-    ec50 = params['EC50']
-    hill = params['Hill']
+    c = params['c']
+    d = params['d']
+    e = params['e']
+    b = params['b']
     
-    E = np.clip(E, e0 + 0.001, emax - 0.001)
+    if E <= c:
+        return float('inf')
+    if E >= d:
+        return 0.0
+    
+    try:
+        ratio = (d - c) / (E - c) - 1.0
+        if ratio <= 0:
+            return float('inf')
+        dose = e * np.power(ratio, 1.0 / b)
+        return max(0.0, dose)
+    except Exception:
+        return float('inf')
+
+
+def iso_effective_dose_hill(E: float, params: Dict) -> float:
+    """
+    Calculate the dose that produces effect E using Hill equation inverse.
+    
+    From Hill: E = E0 + (Emax-E0) * (D/EC50)^h / (1 + (D/EC50)^h)
+    Solving for D: D = EC50 * ((E - E0)/(Emax - E))^(1/hill)
+    """
+    if params is None:
+        return float('inf')
+    
+    e0 = params['c']
+    emax = params['d']
+    ec50 = params['e']
+    hill = -params['b']  # Positive slope for Hill equation
+    
+    if E <= e0:
+        return float('inf')
+    if E >= emax:
+        return 0.0
     
     try:
         ratio = (E - e0) / (emax - E)
         if ratio <= 0:
             return float('inf')
         dose = ec50 * np.power(ratio, 1.0 / hill)
-        return dose
+        return max(0.0, dose)
     except Exception:
         return float('inf')
 
 
 def create_response_matrix(df: pd.DataFrame) -> Tuple[np.ndarray, List[float], List[float]]:
-    """
-    Convert input CSV to dose-response matrix format.
-    
-    Returns:
-    --------
-    matrix : 2D numpy array (rows = conc1, cols = conc2)
-    conc1_vals : sorted list of unique conc1 values
-    conc2_vals : sorted list of unique conc2 values
-    """
+    """Convert input CSV to dose-response matrix format."""
     conc1_vals = sorted(df['conc1'].unique())
     conc2_vals = sorted(df['conc2'].unique())
     
@@ -159,21 +234,19 @@ def create_response_matrix(df: pd.DataFrame) -> Tuple[np.ndarray, List[float], L
     return matrix, conc1_vals, conc2_vals
 
 
-def calculate_zip(response_matrix: np.ndarray, conc1_vals: List[float], conc2_vals: List[float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def calculate_zip(response_matrix: np.ndarray, conc1_vals: List[float], 
+                  conc2_vals: List[float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Calculate ZIP synergy scores matching R implementation.
+    Calculate ZIP synergy scores matching R's SynergyFinder implementation.
     
-    The R ZIP algorithm:
-    1. Fit single-drug curves for Drug1 (row 0, cols 1:n) and Drug2 (col 0, rows 1:n)
-       - Fix lower bound to control (response_matrix[0,0]) and upper bound to 100
-    2. Create updated_single matrix with FITTED single-drug values
-    3. For each column j>0: fit curve through rows, fixing lower bound to Drug2 response at that conc
-    4. For each row i>0: fit curve through cols, fixing lower bound to Drug1 response at that conc
+    Algorithm from R's ZIP() function:
+    1. Fit single-drug curves with drm(..., fct = LL.4(fixed = c(NA, 0, 100, NA)))
+    2. Create updated_single matrix with fitted single-drug values
+    3. For each column (fixed conc2), fit LL.4 through rows with lower bound = Drug2 response
+    4. For each row (fixed conc1), fit LL.4 through columns with lower bound = Drug1 response
     5. ZIP_fit = average of column-fitted and row-fitted matrices
     6. ZIP_ref = Bliss independence: updated_single[i,0] + updated_single[0,j] - product/100
     7. ZIP_synergy = ZIP_fit - ZIP_ref
-    
-    Key: R uses drm/drc package with LL.4 (4PL) where params are: Hill, E0, Emax, EC50
     """
     n_rows, n_cols = response_matrix.shape
     
@@ -184,11 +257,11 @@ def calculate_zip(response_matrix: np.ndarray, conc1_vals: List[float], conc2_va
     
     drug1_doses = np.array(conc1_vals[1:])
     drug1_responses = response_matrix[1:, 0]
-    drug1_params = fit_4pl_curve(drug1_doses, drug1_responses, fixed_lower=control)
+    drug1_params = fit_ll4_curve(drug1_doses, drug1_responses, fixed_lower=control)
     
     drug2_doses = np.array(conc2_vals[1:])
     drug2_responses = response_matrix[0, 1:]
-    drug2_params = fit_4pl_curve(drug2_doses, drug2_responses, fixed_lower=control)
+    drug2_params = fit_ll4_curve(drug2_doses, drug2_responses, fixed_lower=control)
     
     updated_single = np.zeros_like(response_matrix)
     updated_single[0, 0] = 0
@@ -197,11 +270,11 @@ def calculate_zip(response_matrix: np.ndarray, conc1_vals: List[float], conc2_va
     
     if drug1_params:
         for i, d in enumerate(drug1_doses):
-            updated_single[i+1, 0] = predict_4pl(d, drug1_params)
+            updated_single[i+1, 0] = predict_ll4(d, drug1_params)
     
     if drug2_params:
         for j, d in enumerate(drug2_doses):
-            updated_single[0, j+1] = predict_4pl(d, drug2_params)
+            updated_single[0, j+1] = predict_ll4(d, drug2_params)
     
     updated_col = np.zeros_like(response_matrix)
     updated_col[0, :] = updated_single[0, :]
@@ -209,14 +282,12 @@ def calculate_zip(response_matrix: np.ndarray, conc1_vals: List[float], conc2_va
     
     for j in range(1, n_cols):
         col_responses = response_matrix[1:, j]
-        col_doses = drug1_doses
-        
         lower_bound = updated_single[0, j]
-        params = fit_4pl_curve(col_doses, col_responses, fixed_lower=lower_bound)
+        params = fit_ll4_curve(drug1_doses, col_responses, fixed_lower=lower_bound)
         
         if params:
-            for i, d in enumerate(col_doses):
-                updated_col[i+1, j] = predict_4pl(d, params)
+            for i, d in enumerate(drug1_doses):
+                updated_col[i+1, j] = predict_ll4(d, params)
         else:
             updated_col[1:, j] = col_responses
     
@@ -226,14 +297,12 @@ def calculate_zip(response_matrix: np.ndarray, conc1_vals: List[float], conc2_va
     
     for i in range(1, n_rows):
         row_responses = response_matrix[i, 1:]
-        row_doses = drug2_doses
-        
         lower_bound = updated_single[i, 0]
-        params = fit_4pl_curve(row_doses, row_responses, fixed_lower=lower_bound)
+        params = fit_ll4_curve(drug2_doses, row_responses, fixed_lower=lower_bound)
         
         if params:
-            for j, d in enumerate(row_doses):
-                updated_row[i, j+1] = predict_4pl(d, params)
+            for j, d in enumerate(drug2_doses):
+                updated_row[i, j+1] = predict_ll4(d, params)
         else:
             updated_row[i, 1:] = row_responses
     
@@ -257,16 +326,15 @@ def calculate_zip(response_matrix: np.ndarray, conc1_vals: List[float], conc2_va
     return zip_fit_matrix, zip_ref, zip_synergy, updated_single
 
 
-def calculate_loewe(response_matrix: np.ndarray, conc1_vals: List[float], 
+def calculate_loewe(response_matrix: np.ndarray, conc1_vals: List[float],
                     conc2_vals: List[float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Calculate Loewe synergy scores matching R implementation.
+    Calculate Loewe synergy scores matching R's SynergyFinder implementation.
     
     Loewe equation: d1/D1(E) + d2/D2(E) = 1
     where D1(E) and D2(E) are doses that produce effect E if used alone.
     
-    This is solved numerically for each combination to find the expected
-    additive effect (Loewe_ref). The synergy is obs - Loewe_ref.
+    Uses standard Hill equation for inverse calculations (not LL.4).
     """
     n_rows, n_cols = response_matrix.shape
     
@@ -274,56 +342,64 @@ def calculate_loewe(response_matrix: np.ndarray, conc1_vals: List[float],
     loewe_synergy = np.zeros_like(response_matrix)
     loewe_ci = np.full_like(response_matrix, np.nan)
     
+    control = response_matrix[0, 0]
+    
     drug1_doses = np.array(conc1_vals[1:])
     drug1_responses = response_matrix[1:, 0]
-    drug1_params = fit_4pl_curve(drug1_doses, drug1_responses, fixed_lower=response_matrix[0, 0])
+    drug1_params = fit_ll4_curve(drug1_doses, drug1_responses, fixed_lower=control)
     
     drug2_doses = np.array(conc2_vals[1:])
     drug2_responses = response_matrix[0, 1:]
-    drug2_params = fit_4pl_curve(drug2_doses, drug2_responses, fixed_lower=response_matrix[0, 0])
+    drug2_params = fit_ll4_curve(drug2_doses, drug2_responses, fixed_lower=control)
     
     if drug1_params is None or drug2_params is None:
+        for i in range(1, n_rows):
+            for j in range(1, n_cols):
+                max_single = max(response_matrix[i, 0], response_matrix[0, j])
+                loewe_ref[i, j] = max_single
+                loewe_synergy[i, j] = response_matrix[i, j] - max_single
         return loewe_ref, loewe_synergy, loewe_ci
     
     for i in range(1, n_rows):
         for j in range(1, n_cols):
-            d1 = conc2_vals[j]  # Drug2 (column) concentration
-            d2 = conc1_vals[i]  # Drug1 (row) concentration
+            d1 = conc2_vals[j]
+            d2 = conc1_vals[i]
             obs_response = response_matrix[i, j]
             
-            def loewe_equation(E):
-                if E <= drug1_params['E0'] or E >= drug1_params['Emax']:
-                    return 1e10
-                if E <= drug2_params['E0'] or E >= drug2_params['Emax']:
-                    return 1e10
+            def ci_at_E_Hill(E):
+                """Calculate CI using Hill equation."""
+                if E <= drug1_params['c'] or E >= drug1_params['d']:
+                    return float('inf')
+                if E <= drug2_params['c'] or E >= drug2_params['d']:
+                    return float('inf')
                 
-                D1 = iso_effective_dose(E, drug1_params)
-                D2 = iso_effective_dose(E, drug2_params)
+                D1 = iso_effective_dose_hill(E, drug1_params)
+                D2 = iso_effective_dose_hill(E, drug2_params)
                 
                 if D1 <= 0 or D2 <= 0 or np.isinf(D1) or np.isinf(D2):
-                    return 1e10
+                    return float('inf')
                 
-                return d1 / D1 + d2 / D2 - 1.0
+                return d1 / D1 + d2 / D2
             
-            E_guess = min(drug1_params['Emax'], drug2_params['Emax']) - 5
+            def loewe_equation(E):
+                return ci_at_E_Hill(E) - 1.0
             
+            E_guess = 50.0
             try:
                 E_solution = fsolve(loewe_equation, E_guess, full_output=True)
-                E_sol = float(E_solution[0])
+                E_sol = float(E_solution[0][0])
+                ci = ci_at_E_Hill(E_sol)
                 
-                if E_sol < 0 or E_sol > 100 or np.isnan(E_sol):
-                    E_sol = max(drug1_params['E0'], drug2_params['E0']) + 10
-                
-                D1_sol = iso_effective_dose(E_sol, drug1_params)
-                D2_sol = iso_effective_dose(E_sol, drug2_params)
-                
-                if D1_sol > 0 and D2_sol > 0:
-                    ci = d1 / D1_sol + d2 / D2_sol
-                else:
+                if E_sol < 0 or E_sol > 100 or np.isnan(E_sol) or np.isinf(ci):
+                    pred_d1 = predict_hill(d1 + d2, drug1_params)
+                    pred_d2 = predict_hill(d1 + d2, drug2_params)
+                    E_sol = max(pred_d1, pred_d2)
                     ci = np.nan
-                
+            
             except Exception:
-                E_sol = 0
+                pred_d1 = predict_hill(d1 + d2, drug1_params)
+                pred_d2 = predict_hill(d1 + d2, drug2_params)
+                E_sol = max(pred_d1, pred_d2)
                 ci = np.nan
             
             loewe_ref[i, j] = E_sol
@@ -334,12 +410,7 @@ def calculate_loewe(response_matrix: np.ndarray, conc1_vals: List[float],
 
 
 def calculate_bliss(response_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Calculate Bliss synergy scores.
-    
-    Bliss_ref = E1 + E2 - E1*E2/100 (Bliss independence)
-    Bliss_synergy = observed - Bliss_ref
-    """
+    """Calculate Bliss synergy scores."""
     n_rows, n_cols = response_matrix.shape
     
     bliss_ref = np.zeros_like(response_matrix)
@@ -359,12 +430,7 @@ def calculate_bliss(response_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray
 
 
 def calculate_hsa(response_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Calculate HSA (Highest Single Agent) synergy scores.
-    
-    HSA_ref = max(E1, E2)
-    HSA_synergy = observed - HSA_ref
-    """
+    """Calculate HSA (Highest Single Agent) synergy scores."""
     n_rows, n_cols = response_matrix.shape
     
     hsa_ref = np.zeros_like(response_matrix)
@@ -384,19 +450,8 @@ def calculate_hsa(response_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def generate_output_order(conc1_vals: List[float], conc2_vals: List[float]) -> List[Tuple[float, float]]:
-    """
-    Generate output order matching SynergyFinder format.
-    
-    Order:
-    1. Control (0, 0)
-    2. Drug1 alone (all conc1 > 0 with conc2=0)
-    3. For each conc2 > 0:
-       - Drug2 alone (0, conc2)
-       - All combinations (conc1 > 0, conc2)
-    """
-    grid = []
-    
-    grid.append((0.0, 0.0))
+    """Generate output order matching SynergyFinder format."""
+    grid = [(0.0, 0.0)]
     
     for c1 in conc1_vals:
         if c1 > 0:
@@ -413,16 +468,7 @@ def generate_output_order(conc1_vals: List[float], conc2_vals: List[float]) -> L
 
 
 def calculate_synergy(input_file: str, output_file: str):
-    """
-    Main function to calculate drug synergy from input file.
-    
-    Parameters:
-    -----------
-    input_file : str
-        Path to input CSV file
-    output_file : str
-        Path to output CSV file
-    """
+    """Main function to calculate drug synergy from input file."""
     print(f"Loading input data from: {input_file}")
     df = pd.read_csv(input_file)
     print(f"  Total rows: {len(df)}")
