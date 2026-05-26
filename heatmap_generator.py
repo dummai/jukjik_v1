@@ -72,7 +72,6 @@ def plot_and_save(matrix: pd.DataFrame, out_path: str, dpi: int = 300) -> None:
     )
     ax.xaxis.tick_top()
     ax.xaxis.set_label_position('top')
-    ax.set_xlabel("Drug1_Drug2_Experiment")
     ax.set_ylabel("Model")
     plt.xticks(rotation=45, ha="left")
     plt.tight_layout()
